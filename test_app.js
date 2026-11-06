@@ -1,295 +1,160 @@
 /**
- * Comprehensive Automated Test Suite for Dhill Digital Marketing Portfolio
- * Using Puppeteer (Headless Chrome)
+ * End-to-end checks for the Dhill portfolio. Run: npm test
+ * Serves the site itself on port 4321, then drives it with Puppeteer.
  */
-
 const puppeteer = require('puppeteer');
-const path = require('path');
+const http = require('http');
 const fs = require('fs');
+const path = require('path');
 
-async function runTestSuite() {
-  console.log('====================================================');
-  console.log('🚀 STARTING DIGITAL MARKETING PORTFOLIO TEST SUITE');
-  console.log('====================================================\n');
+const ROOT = __dirname;
+const PORT = 4321;
+const URL = `http://localhost:${PORT}/`;
+const TYPES = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.png': 'image/png', '.xml': 'text/xml', '.txt': 'text/plain' };
 
-  let passedTests = 0;
-  let totalTests = 0;
+let passed = 0;
+let total = 0;
+function check(ok, name, detail = '') {
+  total++;
+  if (ok) passed++;
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${!ok && detail ? ` - ${detail}` : ''}`);
+}
 
-  function assert(condition, testName, details = '') {
-    totalTests++;
-    if (condition) {
-      passedTests++;
-      console.log(`  ✅ [PASS] ${testName}`);
-    } else {
-      console.error(`  ❌ [FAIL] ${testName} ${details ? '- ' + details : ''}`);
-    }
-  }
-
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox']
+const server = http.createServer((req, res) => {
+  const rel = decodeURIComponent(req.url.split('?')[0]);
+  const file = path.join(ROOT, rel === '/' ? 'index.html' : rel);
+  fs.readFile(file, (err, data) => {
+    if (err) { res.writeHead(404); res.end(); return; }
+    res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream' });
+    res.end(data);
   });
+});
 
+(async () => {
+  await new Promise((r) => server.listen(PORT, r));
+  const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 800 });
 
-  // Track console errors and failed network requests
-  const consoleErrors = [];
-  const networkErrors = [];
+  const errors = [];
+  const external = /fonts\.(googleapis|gstatic)\.com/;
+  page.on('pageerror', (e) => errors.push(e.message));
+  page.on('response', (r) => { if (r.status() >= 400 && !external.test(r.url())) errors.push(`${r.status()} ${r.url()}`); });
 
-  page.on('console', msg => {
-    if (msg.type() === 'error') {
-      consoleErrors.push(msg.text());
-    }
-  });
-
-  page.on('response', response => {
-    if (response.status() >= 400) {
-      networkErrors.push(`${response.status()} ${response.url()}`);
-    }
-  });
+  const visible = (sel) => page.$eval(sel, (el) => el.getBoundingClientRect().height > 0 && getComputedStyle(el).visibility !== 'hidden');
 
   try {
-    // ------------------------------------------------------------------------
-    // TEST 1: Page Load & Network Status
-    // ------------------------------------------------------------------------
-    console.log('--- TEST GROUP 1: Page Load & Network Integrity ---');
-    const response = await page.goto('http://localhost:4321', { waitUntil: 'networkidle0' });
-    
-    assert(response.status() === 200, 'Server responded with HTTP 200 OK');
-    assert(networkErrors.length === 0, 'No 404 or failed asset requests', networkErrors.join(', '));
-    assert(consoleErrors.length === 0, 'No JavaScript console errors', consoleErrors.join(', '));
+    console.log('\nPage and SEO');
+    const res = await page.goto(URL, { waitUntil: 'load' });
+    check(res.status() === 200, 'Page responds 200');
+    check((await page.$$('h1')).length === 1, 'Exactly one H1');
+    check(!!(await page.$('link[rel="canonical"]')), 'Canonical URL present');
+    const ogImage = await page.$eval('meta[property="og:image"]', (m) => m.content);
+    check(ogImage.startsWith('https://') && fs.existsSync(path.join(ROOT, 'assets/images/og-card.png')), 'Open Graph image is absolute and exists');
+    check(fs.existsSync(path.join(ROOT, 'robots.txt')) && fs.existsSync(path.join(ROOT, 'sitemap.xml')), 'robots.txt and sitemap.xml exist');
 
-    const pageTitle = await page.title();
-    assert(pageTitle.includes('Dhill') && pageTitle.includes('Digital Marketing Portfolio'), 
-      'Page title matches expected branding', `Got: "${pageTitle}"`);
+    console.log('\nCredibility');
+    const text = await page.$eval('body', (b) => b.innerText);
+    for (const banned of ['100%', 'Data-Driven', 'revenue-driving', 'profitable', 'compounding', 'high-converting', 'guarantee']) {
+      check(!text.toLowerCase().includes(banned.toLowerCase()), `Page does not claim "${banned}"`);
+    }
+    const srcs = await page.$$eval('img', (imgs) => imgs.map((i) => i.getAttribute('src')));
+    check(!srcs.some((s) => /hero_growth|spark_advertising|idea_enterprises|profile\.jpg/.test(s)), 'No mockup images or stock portrait in use');
+    check(text.includes('Illustrative data') && text.includes('not client results'), 'Sample report is labelled as illustrative');
 
-    // ------------------------------------------------------------------------
-    // TEST 2: Image Asset Loading Verification
-    // ------------------------------------------------------------------------
-    console.log('\n--- TEST GROUP 2: Visual Assets & Images ---');
-    const imagesCheck = await page.evaluate(() => {
-      const imgs = Array.from(document.querySelectorAll('img'));
-      return imgs.map(img => ({
-        src: img.src,
-        alt: img.alt,
-        complete: img.complete,
-        naturalWidth: img.naturalWidth
-      }));
-    });
+    console.log('\nContact links');
+    const hrefs = await page.$$eval('a[href]', (as) => as.map((a) => a.getAttribute('href')));
+    check(!hrefs.includes('https://wa.me/') && hrefs.includes('https://wa.me/919360123584') && !hrefs.includes('https://linkedin.com'), 'No empty WhatsApp or LinkedIn links');
 
-    assert(imagesCheck.length >= 4, `At least 4 images exist on page (Found: ${imagesCheck.length})`);
-    
-    const allImagesLoaded = imagesCheck.every(img => img.complete && img.naturalWidth > 0);
-    assert(allImagesLoaded, 'All images loaded successfully with non-zero dimensions');
-
-    const heroImage = imagesCheck.find(img => img.src.includes('hero_growth.jpg'));
-    assert(!!heroImage && heroImage.naturalWidth > 0, 'Hero 3D analytics image is loaded');
-
-    const sparkImage = imagesCheck.find(img => img.src.includes('spark_advertising.jpg'));
-    assert(!!sparkImage && sparkImage.naturalWidth > 0, 'Spark Advertising mockup image is loaded');
-
-    const ideaImage = imagesCheck.find(img => img.src.includes('idea_enterprises.jpg'));
-    assert(!!ideaImage && ideaImage.naturalWidth > 0, 'Idea Enterprises mockup image is loaded');
-
-    const profileImage = imagesCheck.find(img => img.src.includes('profile.jpg'));
-    assert(!!profileImage && profileImage.naturalWidth > 0, 'Marketer profile portrait image is loaded');
-
-    // ------------------------------------------------------------------------
-    // TEST 3: Desktop Navigation & Drawer Visibility (Bug Fix Check)
-    // ------------------------------------------------------------------------
-    console.log('\n--- TEST GROUP 3: Navigation & Desktop Layout Verification ---');
-    const drawerIsHiddenOnDesktop = await page.evaluate(() => {
-      const drawer = document.getElementById('mobileDrawer');
-      if (!drawer) return false;
-      const style = window.getComputedStyle(drawer);
-      return style.display === 'none';
-    });
-    assert(drawerIsHiddenOnDesktop, 'Mobile navigation drawer is hidden (display: none) on desktop');
-
-    const navLinksCount = await page.$$eval('.nav-link', links => links.length);
-    assert(navLinksCount >= 6, `Desktop navigation links rendered properly (Found: ${navLinksCount})`);
-
-    // ------------------------------------------------------------------------
-    // TEST 4: Theme Toggle (Dark/Light Mode)
-    // ------------------------------------------------------------------------
-    console.log('\n--- TEST GROUP 4: Theme Switcher (Dark / Light Mode) ---');
-    const initialTheme = await page.evaluate(() => document.documentElement.getAttribute('data-theme'));
-    assert(initialTheme === 'dark', 'Initial theme is dark mode');
-
+    console.log('\nTheme');
     await page.click('#themeToggleBtn');
-    const toggledTheme = await page.evaluate(() => document.documentElement.getAttribute('data-theme'));
-    assert(toggledTheme === 'light', 'Theme toggled to light mode on button click');
-
-    const savedThemeInStorage = await page.evaluate(() => localStorage.getItem('dhill_theme'));
-    assert(savedThemeInStorage === 'light', 'Theme preference saved in localStorage');
-
-    // Toggle back to dark
+    check(await page.evaluate(() => document.documentElement.dataset.theme === 'light' && localStorage.getItem('dhill_theme') === 'light'), 'Toggle switches to light and saves it');
     await page.click('#themeToggleBtn');
-    const finalTheme = await page.evaluate(() => document.documentElement.getAttribute('data-theme'));
-    assert(finalTheme === 'dark', 'Theme toggled back to dark mode');
+    check(await page.evaluate(() => document.documentElement.dataset.theme === 'dark'), 'Toggle returns to dark');
 
-    // ------------------------------------------------------------------------
-    // TEST 5: Portfolio Projects (Spark Advertising & Idea Enterprises)
-    // ------------------------------------------------------------------------
-    console.log('\n--- TEST GROUP 5: Projects & Case Study Modal ---');
-    const sparkCardExists = await page.$('#project-spark') !== null;
-    const ideaCardExists = await page.$('#project-idea') !== null;
-    assert(sparkCardExists, 'Project 01 (Spark Advertising) card exists');
-    assert(ideaCardExists, 'Project 02 (Idea Enterprises) card exists');
+    console.log('\nStructure');
+    check((await page.$$('#project-spark, #project-idea')).length === 2, 'Both case studies present');
+    check((await page.$$('.svc')).length === 4, 'Four service groups');
+    check((await page.$$('.step')).length === 6, 'Six workflow stages');
+    check((await page.$$('.pillars li')).length === 5, 'Five growth pillars');
 
-    // Test Case Study Modal for Spark Advertising
-    await page.click('#project-spark .open-case-study-btn');
-    await page.waitForSelector('#caseStudyModal.open', { timeout: 2000 });
-    
-    const modalSparkTitle = await page.$eval('#modalCaseStudyContent', el => el.textContent);
-    assert(modalSparkTitle.includes('Spark Advertising') && modalSparkTitle.includes('Google Business Profile setup'), 
-      'Case study modal opened with Spark Advertising deliverables');
+    await page.click('.step:nth-child(3) summary');
+    const openSteps = await page.$$eval('.step[open]', (s) => s.length);
+    check(openSteps === 1, 'Opening a workflow stage closes the previous one', `open: ${openSteps}`);
 
-    // Close modal via Escape key
-    await page.keyboard.press('Escape');
-    await page.waitForFunction(() => !document.getElementById('caseStudyModal').classList.contains('open'));
-    assert(true, 'Case study modal closed via Escape key');
-
-    // Test Case Study Modal for Idea Enterprises
-    await page.click('#project-idea .open-case-study-btn');
-    await page.waitForSelector('#caseStudyModal.open', { timeout: 2000 });
-    const modalIdeaTitle = await page.$eval('#modalCaseStudyContent', el => el.textContent);
-    assert(modalIdeaTitle.includes('Idea Enterprises'), 'Case study modal opened with Idea Enterprises content');
-
-    // Close modal via Close Button
-    await page.click('#modalCloseBtn');
-    await page.waitForFunction(() => !document.getElementById('caseStudyModal').classList.contains('open'));
-    assert(true, 'Case study modal closed via close button');
-
-    // ------------------------------------------------------------------------
-    // TEST 6: Core Services Filtering & Keyword Search
-    // ------------------------------------------------------------------------
-    console.log('\n--- TEST GROUP 6: Services Filter & Real-Time Search ---');
-    const totalServices = await page.$$eval('.service-card', cards => cards.length);
-    assert(totalServices === 11, `All 11 Core Services rendered (Found: ${totalServices})`);
-
-    // Click "Local SEO & Discovery" filter
-    await page.click('.filter-btn[data-filter="local-seo"]');
-    const visibleAfterCat = await page.$$eval('.service-card', cards => 
-      cards.filter(c => c.style.display !== 'none').length
-    );
-    assert(visibleAfterCat > 0 && visibleAfterCat < 11, `Category filter works (Visible: ${visibleAfterCat} of 11)`);
-
-    // Reset to All Services
-    await page.click('.filter-btn[data-filter="all"]');
-    const visibleAfterAll = await page.$$eval('.service-card', cards => 
-      cards.filter(c => c.style.display !== 'none').length
-    );
-    assert(visibleAfterAll === 11, 'Reset to All Services displays all 11 cards');
-
-    // Search for "video"
-    await page.type('#serviceSearchInput', 'video');
-    const visibleAfterSearch = await page.$$eval('.service-card', cards => 
-      cards.filter(c => c.style.display !== 'none').length
-    );
-    assert(visibleAfterSearch > 0 && visibleAfterSearch < 11, `Keyword search for "video" filtered cards (Visible: ${visibleAfterSearch})`);
-
-    // Clear search
-    await page.$eval('#serviceSearchInput', el => el.value = '');
-    await page.type('#serviceSearchInput', ' ');
-    await page.keyboard.press('Backspace');
-
-    // ------------------------------------------------------------------------
-    // TEST 7: Interactive 6-Step Workflow Timeline
-    // ------------------------------------------------------------------------
-    console.log('\n--- TEST GROUP 7: 6-Stage Workflow Timeline Switcher ---');
-    const workflowCardsCount = await page.$$eval('.workflow-step-card', cards => cards.length);
-    assert(workflowCardsCount === 6, `All 6 Workflow Timeline Steps rendered (Found: ${workflowCardsCount})`);
-
-    // Click Phase 02
-    await page.click('.workflow-step-card[data-step-index="1"]');
-    const panelText02 = await page.$eval('#workflowDetailPanel', el => el.textContent);
-    assert(panelText02.includes('PHASE 02') && panelText02.includes('Establish the Foundation'), 
-      'Workflow detail panel updated to Phase 02 (Establish the Foundation)');
-
-    // Click Phase 06
-    await page.click('.workflow-step-card[data-step-index="5"]');
-    const panelText06 = await page.$eval('#workflowDetailPanel', el => el.textContent);
-    assert(panelText06.includes('PHASE 06') && panelText06.includes('Analyse & Improve'), 
-      'Workflow detail panel updated to Phase 06 (Analyse & Improve)');
-
-    // ------------------------------------------------------------------------
-    // TEST 8: Interactive Project Scope Builder & Brief Generator
-    // ------------------------------------------------------------------------
-    console.log('\n--- TEST GROUP 8: Interactive Project Scope Builder ---');
-    // Select Service A from card
-    const firstServiceCard = await page.$('.service-card[data-service-name="Google Business Profile & Local SEO"]');
-    await firstServiceCard.$eval('.select-service-btn', btn => btn.click());
-
-    // Select Service B from card
-    const secondServiceCard = await page.$('.service-card[data-service-name="Social Media Management"]');
-    await secondServiceCard.$eval('.select-service-btn', btn => btn.click());
-
-    const selectedCount = await page.$eval('#selectedCountBadge', el => el.textContent);
-    assert(selectedCount === '2', `Selected scope badge updated to 2 (Got: ${selectedCount})`);
-
-    // Fill in business details
-    await page.type('#clientBusinessName', 'Dhill Growth Partners');
-    await page.type('#clientWebsite', 'https://dhillmarketing.example.com');
-    await page.type('#clientPainPoints', 'Need consistent social presence and local Google Maps visibility.');
-
-    // Click Copy Brief button
+    console.log('\nEnquiry flow');
+    await page.$eval('.svc .discuss[data-need="Local visibility"]', (a) => a.click());
+    await page.click('#nextBtn');
+    check((await page.$eval('#err-clientBusinessName', (e) => e.textContent)).length > 0, 'Step 1 requires a company name');
+    await page.type('#clientBusinessName', 'Test Co');
+    await page.click('#nextBtn');
+    check(await page.$eval('input[value="Local visibility"]', (c) => c.checked), 'Service card preselects its need');
+    await page.$eval('input[value="Content creation"]', (c) => c.click());
+    check((await page.$eval('#selectedCountBadge', (e) => e.textContent)) === '2', 'Selected count updates');
+    await page.$eval('#pickedList .pill:last-child', (b) => b.click());
+    check((await page.$eval('#selectedCountBadge', (e) => e.textContent)) === '1', 'Selection can be removed');
+    await page.click('#nextBtn');
+    await page.type('#clientGoal', 'More enquiries from Maps');
+    await page.click('#prevBtn');
+    await page.click('#prevBtn');
+    check((await page.$eval('#clientBusinessName', (e) => e.value)) === 'Test Co', 'Going back keeps entries');
+    await page.click('#nextBtn');
+    await page.click('#nextBtn');
+    await page.click('#nextBtn');
+    await page.type('#clientName', 'Asha');
+    await page.type('#clientContact', 'not-an-email');
+    await page.click('#nextBtn');
+    check((await page.$eval('#err-clientContact', (e) => e.textContent)).includes('valid email'), 'Invalid email is rejected');
+    await page.$eval('#clientContact', (e) => { e.value = ''; });
+    await page.type('#clientContact', 'asha@test.co');
+    await page.click('#nextBtn');
+    const brief = await page.$eval('#briefPreview', (e) => e.textContent);
+    check(brief.includes('Test Co') && brief.includes('Local visibility') && brief.includes('asha@test.co'), 'Brief contains the entered details');
+    check(!(await page.$eval('#whatsappInquiryBtn', (b) => b.hidden)), 'WhatsApp send is available');
     await page.click('#copyBriefBtn');
-    await page.waitForSelector('#toastNotice.show', { timeout: 2000 });
-    const toastMessage = await page.$eval('#toastNotice', el => el.textContent);
-    assert(toastMessage.includes('copied to clipboard'), 'Toast notification appeared when copying project brief');
+    await page.waitForFunction(() => document.getElementById('sendStatus').textContent.length > 0);
+    check((await page.$eval('#sendStatus', (e) => e.textContent)).length > 0, 'Copy gives feedback');
 
-    // ------------------------------------------------------------------------
-    // TEST 9: Mobile Viewport & Navigation Drawer
-    // ------------------------------------------------------------------------
-    console.log('\n--- TEST GROUP 9: Mobile Responsiveness & Drawer Toggle ---');
-    await page.setViewport({ width: 375, height: 667 });
+    console.log('\nResponsive');
+    for (const width of [320, 360, 390, 430, 768, 1024, 1440]) {
+      await page.setViewport({ width, height: 800 });
+      await new Promise((r) => setTimeout(r, 100));
+      const over = await page.evaluate(() => {
+        const w = document.documentElement.clientWidth;
+        const bad = [...document.querySelectorAll('main *, header *, footer *')].filter((el) => {
+          if (el.closest('.table-wrap') || el.closest('#briefPreview')) return false;
+          const r = el.getBoundingClientRect();
+          return r.width > 0 && (r.right > w + 1 || r.left < -1) && !el.closest('.skip') && el.className !== 'skip';
+        });
+        return { sw: document.documentElement.scrollWidth, w, bad: bad.slice(0, 3).map((e) => e.tagName + '.' + e.className) };
+      });
+      check(over.sw <= over.w && over.bad.length === 0, `No horizontal overflow at ${width}px`, JSON.stringify(over));
+      if (width <= 430) {
+        const size = await page.$eval('body', (b) => parseFloat(getComputedStyle(b).fontSize));
+        check(size >= 16, `Body text is at least 16px at ${width}px`, String(size));
+      }
+    }
 
-    const menuBtnVisibleOnMobile = await page.evaluate(() => {
-      const btn = document.getElementById('mobileMenuBtn');
-      return window.getComputedStyle(btn).display === 'flex';
-    });
-    assert(menuBtnVisibleOnMobile, 'Mobile hamburger menu button is visible on 375px viewport');
-
-    // Open mobile menu
+    await page.setViewport({ width: 390, height: 800 });
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
+    check(await visible('#mobileMenuBtn'), 'Menu button visible on mobile');
     await page.click('#mobileMenuBtn');
-    await new Promise(r => setTimeout(r, 400));
-    const drawerIsOpen = await page.$eval('#mobileDrawer', el => el.classList.contains('open'));
-    assert(drawerIsOpen, 'Mobile navigation drawer opened on menu click');
+    check(await page.$eval('#mobileMenuBtn', (b) => b.getAttribute('aria-expanded') === 'true') && await visible('#mobileDrawer'), 'Menu opens');
+    await page.keyboard.press('Escape');
+    check(!(await visible('#mobileDrawer')), 'Escape closes the menu');
+    const small = await page.evaluate(() => [...document.querySelectorAll('.btn, .icon-btn, .to-top, .step summary, .more summary')]
+      .filter((el) => el.getBoundingClientRect().height > 0)
+      .filter((el) => { const r = el.getBoundingClientRect(); return r.height < 44 || r.width < 44; }).map((e) => e.className));
+    check(small.length === 0, 'Primary controls are at least 44px', small.join(', '));
 
-    // Click a nav link inside drawer to verify it closes
-    await page.evaluate(() => {
-      document.querySelector('#mobileDrawer .mobile-nav-link[href="#services"]').click();
-    });
-    await new Promise(r => setTimeout(r, 400));
-    const drawerIsClosed = await page.$eval('#mobileDrawer', el => !el.classList.contains('open'));
-    assert(drawerIsClosed, 'Mobile navigation drawer closed after clicking a section link');
-
-    // Reset viewport to desktop
-    await page.setViewport({ width: 1280, height: 800 });
-
-    // Capture screenshot of clean hero & navigation
-    const screenshotPath = path.join(__dirname, 'test_verification.png');
-    await page.screenshot({ path: screenshotPath, fullPage: false });
-    assert(fs.existsSync(screenshotPath), `Verification screenshot captured at ${screenshotPath}`);
-
-  } catch (error) {
-    console.error('❌ Test suite encountered unhandled error:', error);
+    check(errors.length === 0, 'No page errors or failed requests', errors.join(', '));
+  } catch (e) {
+    check(false, 'Suite ran to completion', e.message);
   } finally {
     await browser.close();
+    server.close();
   }
 
-  console.log('\n====================================================');
-  console.log(`📊 TEST SUITE SUMMARY: ${passedTests} / ${totalTests} TESTS PASSED`);
-  if (passedTests === totalTests) {
-    console.log('🎉 ALL TESTS PASSED SUCCESSFULLY! APPLICATION IS 100% HEALTHY.');
-  } else {
-    console.log(`⚠️ ${totalTests - passedTests} TESTS FAILED.`);
-  }
-  console.log('====================================================');
-
-  process.exit(passedTests === totalTests ? 0 : 1);
-}
-
-runTestSuite();
+  console.log(`\n${passed} of ${total} checks passed`);
+  process.exit(passed === total ? 0 : 1);
+})();
