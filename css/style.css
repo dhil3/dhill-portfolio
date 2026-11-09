@@ -158,6 +158,12 @@ img { max-width: 100%; height: auto; display: block; }
 .cases { display: grid; gap: 1.5rem; }
 .case { display: grid; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 .case-evidence { padding: 1.25rem; background: var(--raised); display: grid; gap: .5rem; align-content: start; font-size: var(--text-small); }
+.case-evidence table { width: 100%; border-collapse: collapse; font-size: var(--text-small); margin: .3rem 0; }
+.case-evidence th, .case-evidence td { padding: .35rem .25rem; text-align: right; border-bottom: 1px solid var(--border); line-height: 1.35; }
+.case-evidence th:first-child { text-align: left; padding-left: 0; font-weight: 500; color: var(--text-2); }
+.case-evidence thead th { color: var(--text-3); font-weight: 600; font-size: var(--text-label); text-transform: uppercase; letter-spacing: .04em; }
+.case-evidence td { color: var(--text); font-weight: 600; font-family: var(--font-mono); font-size: .8125rem; }
+.note-box { font-size: var(--text-small); padding: .65rem .8rem; border-left: 3px solid var(--accent); background: var(--surface); border-radius: 0 6px 6px 0; margin-top: .4rem; line-height: 1.45; }
 .case-mono { width: 48px; height: 48px; border-radius: 12px; display: grid; place-items: center; font: 800 1.375rem var(--font-heading); color: #0B1020; background: #F5B544; margin-bottom: .35rem; }
 .case-idea .case-mono { background: #22C997; }
 .case-evidence { order: 2; }
