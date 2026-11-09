@@ -5,7 +5,7 @@
  *   linkedin: full profile URL
  */
 window.SITE_CONFIG = {
-  email: 'dhilkumar10@gmail.com',
+  email: 'dhilkumar05@gmail.com',
   whatsapp: '919360123584',
   linkedin: 'https://www.linkedin.com/in/dhil-kumar/'
 };
